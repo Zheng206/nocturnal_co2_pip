@@ -1,0 +1,336 @@
+---
+title: "Overnight CO2 Aim3 Final"
+format: 
+  html:
+    self-contained: true
+    title-block-banner: true
+    #title-block-banner-color: "#7FFFD4"
+    number-sections: true
+    page-layout: full
+    toc: true
+    toc-title: Contents
+    toc-location: left
+    code-fold: true
+    code-overflow: wrap
+    code-tools: true
+    theme: flatly
+    cap-location: bottom
+    
+editor: visual
+author: "Zheng Ren"
+date: "`r Sys.Date()`"
+execute:
+  error: false
+  warning: false
+  message: false
+  results: asis
+  freeze: auto
+---
+
+```{r setup}
+#| include: false
+#knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+knitr::opts_knit$set(root.dir = "/Users/zhengren/Desktop/Nocturnal_CO2")
+options(scipen=999)
+setwd("/Users/zhengren/Desktop/Nocturnal_CO2")
+library(dplyr)
+library(stringr)
+library(tidyverse)
+library(glue)
+library(readxl)
+library(ggplot2)
+library(rlang)
+library(DT)
+library(broom)
+library(ggfortify)
+library(kableExtra)
+library(corrplot)
+library(car)
+library(openxlsx)
+library(lme4)
+library(broom.mixed)
+library(glmmLasso)
+library(survival)
+source("./code/R/pipeline/co2_function.R")
+
+#total_df = read_csv("./code/co2_app/data/data_stream/total_df.csv")
+#subject_summary = read_csv("./code/co2_app/data/wavelet/subject_summary.csv")
+#features_df = read_csv("./code/co2_app/data/wavelet/features_df.csv")
+cox_result = read_csv("./data/kaplan-meier/cox_result_20240311.csv")
+
+total_df = read_csv("~/Desktop/co2_app/data/data_stream/total_df.csv")
+subject_summary = read_csv("~/Desktop/co2_app/data/wavelet/subject_summary.csv")
+features_df = read_csv("~/Desktop/co2_app/data/wavelet/features_df.csv")
+
+```
+
+```{r function}
+univariate_mix_logistic = function(outcome, variable, mix_df){
+  glm1 = glm(as.formula(paste0(outcome, " ~ ", variable)), data = mix_df, family = binomial(link = "logit"))
+  model = glmer(as.formula(paste0(outcome, " ~ ", variable, " + (1 | subject)")), data = mix_df, family = binomial(link = "logit"), start = list(fixef=coef(glm1)), control = glmerControl(nAGQ0initStep=FALSE))
+  result = model %>% tidy(conf.int = TRUE) %>% filter(term == variable) %>% dplyr::select(term, conf.low, estimate, conf.high, p.value) %>% mutate(outcome = outcome) 
+  return(result)
+}
+
+univariate_mix = function(outcome, variable, mix_df){
+  model = lmerTest::lmer(as.formula(paste0(outcome, " ~ ", variable, " + (1 | subject)")), data = mix_df)
+  result = model %>% tidy(conf.int = TRUE) %>% filter(term == variable) %>% dplyr::select(term, conf.low, estimate, conf.high, p.value) %>% mutate(outcome = outcome)
+  return(result)
+}
+```
+
+In this Aim, we want to determine if 1) PtCO2 **raw features** extracted directly from nocturnal continuous data streams and 2) **wavelet features** extracted from nocturnal data streams after applying discrete wavelet transform are associated with standard clinical measurements **FVC** and **MIP**.
+
+# Method
+
+**Step 1: Mixed Effects Model**
+
+We used **mixed-effects model** (for continuous dependent variables) and **mixed-effects logistic regression model** (for binary dependent variables) to determine if any PtCO2 raw features and wavelet features are significantly associated with standard measurements FVC, MIP and SpO2 (suggested by Jason). We employed **univariate models** to [avoid multicollinearity]{.underline} issues.
+
+$$\text{standard measurement} \sim x_{i} + (1 | subject)$$
+
+::: callout-note
+$x_{i}$ is taken from both the **raw PtCO2 feature sets (18)** and the **wavelet feature sets (205)**. We tried two forms of standard measurements here:
+
+-   **continuous variable**: fvc, mip, spo2
+-   **binary variable** (event): mip \> -60, mean spo2 \< 88% (the model failed for fvc \< 50 due to a lack of events)
+:::
+
+**Step 2: Hierarchical Clustering**
+
+-   night level
+
+we employed the complete-linkage method with Euclidean distance to identify distinct clusters at the **night level**.
+
+-   visit level
+
+we applied the majority vote method to summarize the night-level result to the **visit-level**.
+
+-   subject level
+
+we applied the majority vote method to summarize the visit-level result to the **subject-level**.
+
+**Step 3: Cox Regression Model with Time-dependent Covariates**
+
+We employed Cox regression model with time-dependent covariates to quantify an effect size of a time-varying variable on the occurrence of the event of interest.
+
+The quantity of interest from the model is a hazard ratio (HR). A HR \< 1 indicates reduced hazard of the event of interest whereas a HR \> 1 indicates an increased hazard of the event of interest.
+
+$$h(t|Z(t)) = h_{0}(t)exp(\beta'x + \gamma'Xg(t))$$ $$Z(t) = [x_{1}, x_{2} ... x_{p}, X_{1}g(t), X_{2}g(t)...X_{q}g(t)]$$ where $\beta'$ and $\gamma'$ are coefficients of time-fixed and time-varying covariate respectively. $Z(t)$ represent the covariates ($x_{i}$ represents time-fixed variable whereas $X_{i}g(t)$ represents time-varying variable. $h(t)$ is the hazard ratio at which events occur. $h(t_{0})$ is the underlying baseline hazard.
+
+::: callout-note
+In our analysis, we used FVC \< 50 and MIP \> -60 as the events of interest (**time to first occurrence**), with PtCO2 raw features as time-varying covariates (**fitting one feature at a time**).
+
+$$h(t|X_{1}g(t)) = h_{0}(t)exp(\beta'X_{1}g(t))$$ $h(t)$ is the hazard ratio at which MIP or FVC events first occurred. $h(t_{0})$ is the underlying baseline hazard. $X_{1}$ is the single time-varying variable from PtCO2 raw feature sets.
+:::
+
+# Result
+
+## Mixed Effect Model
+
+```{r}
+wave_features = colnames(features_df)[-c(1:2)]
+wave_features = sapply(wave_features, function(x) gsub(" ", "_", x), USE.NAMES = FALSE)
+colnames(features_df) = c(colnames(features_df)[1:2], wave_features)
+
+# Mixed Model Data
+mix_df = subject_summary %>% left_join(features_df, by = c("subject", "day")) %>% na.omit() %>% group_by(subject, visit) %>% summarise_if(is.numeric, mean, na.rm = TRUE) %>% ungroup() 
+mix_df= mix_df[,apply(mix_df, 2, function(col) { length(unique(col)) > 1 })]
+wave_features = colnames(mix_df)[grepl("_level_", colnames(mix_df))]
+wave_features = wave_features[which(!grepl("*_13$|*_12$|*_11$|*_10$", wave_features))]
+mix_df[wave_features] = scale(mix_df[wave_features], center = TRUE, scale = TRUE)
+mix_df$subject = as.factor(mix_df$subject)
+mix_df = mix_df %>% mutate(fvc_50 = case_when(fvc < 50 ~ 1, 
+                                              fvc >= 50 ~ 0),
+                           mip_60 = case_when(mip > -60 ~ 1, 
+                                              mip <= -60 ~ 0),
+                           spo2_88 = case_when(event_spo2 > 0 ~ 1, 
+                                               event_spo2 == 0 ~ 0))
+```
+
+::: panel-tabset
+### Raw Features
+
+-   Continuous Outcome
+
+It appears that the **mean and median level of PtCO2** are [**negatively**]{style="color:green;"} associated with **SpO2**. Additionally, the **range of PtCO2** and the **standard deviations** of both the PCO2 and the PCO2 changes from the baseline have a significant association with FVC.
+
+```{r}
+# Raw Feature Significance
+raw_features = colnames(mix_df)[c(3:4, 10:15, 17:22, 31:34)]
+fvc_con = lapply(raw_features, function(x) univariate_mix("fvc", x, mix_df)) %>% bind_rows() %>% arrange(p.value)
+mip_con = lapply(raw_features, function(x) univariate_mix("mip", x, mix_df)) %>% bind_rows() %>% arrange(p.value)
+spo2_con = lapply(raw_features, function(x) univariate_mix("mean_SpO2", x, mix_df)) %>% bind_rows() %>% arrange(p.value)
+con_result = rbind(fvc_con, mip_con, spo2_con) %>% arrange(p.value) %>% filter(p.value <= 0.1) %>% mutate(conf.low = sprintf("%.3f", conf.low), estimate = sprintf("%.3f", estimate), conf.high = sprintf("%.3f", conf.high), p.value = sprintf("%.3f", p.value))
+kable(con_result, align = "c") %>% kable_styling(bootstrap_options = "striped") %>% row_spec(which(as.numeric(con_result$p.value) <= 0.05), bold = F, color = "black", background = "lightyellow") %>%
+  kable_classic(html_font = "Cambria") %>%
+  column_spec(3, color = ifelse(as.numeric(con_result$estimate) < 0, "green", "red"))
+```
+
+-   Binary Outcome
+
+It appears that the **standard deviation of PtCO2 changes from the spot CO2 baseline** has a significant association with the occurrence of **absolute MIP going below 60**.
+
+```{r}
+# Raw Feature Significance
+#fvc_bi = lapply(raw_features, function(x) #univariate_mix_logistic("fvc_50", x, mix_df)) %>% bind_rows() %>% arrange(p.value)
+mip_bi = lapply(raw_features, function(x) univariate_mix_logistic("mip_60", x, mix_df)) %>% bind_rows() %>% arrange(p.value)
+spo2_bi = lapply(raw_features, function(x) univariate_mix_logistic("spo2_88", x, mix_df)) %>% bind_rows() %>% arrange(p.value)
+bi_result = rbind(mip_bi, spo2_bi) %>% arrange(p.value) %>% filter(p.value <= 0.1) %>% mutate(conf.low = sprintf("%.3f", conf.low), estimate = sprintf("%.3f", estimate), conf.high = sprintf("%.3f", conf.high), p.value = sprintf("%.3f", p.value))
+kable(bi_result, align = "c") %>% kable_styling(bootstrap_options = "striped") %>% row_spec(which(as.numeric(bi_result$p.value) <= 0.05), bold = F, color = "black", background = "lightyellow") %>%
+  kable_classic(html_font = "Cambria") %>%
+  column_spec(3, color = ifelse(as.numeric(bi_result$estimate) < 0, "green", "red"))
+```
+
+### Wavelet Features
+
+This section shows some potential significant wavelet features. Further validating the results requires a larger sample size.
+
+-   Continuous Outcome
+
+```{r}
+# Raw Feature Significance
+fvc_con = lapply(wave_features, function(x) univariate_mix("fvc", x, mix_df)) %>% bind_rows() %>% arrange(p.value)
+mip_con = lapply(wave_features, function(x) univariate_mix("mip", x, mix_df)) %>% bind_rows() %>% arrange(p.value)
+spo2_con = lapply(wave_features, function(x) univariate_mix("mean_SpO2", x, mix_df)) %>% bind_rows() %>% arrange(p.value)
+con_result = rbind(fvc_con, mip_con, spo2_con) %>% arrange(p.value) %>% filter(p.value <= 0.05) %>% mutate(conf.low = sprintf("%.3f", conf.low), estimate = sprintf("%.3f", estimate), conf.high = sprintf("%.3f", conf.high), p.value = sprintf("%.3f", p.value))
+kable(con_result, align = "c") %>% kable_styling(bootstrap_options = "striped") %>% row_spec(which(as.numeric(con_result$p.value) <= 0.05), bold = F, color = "black", background = "lightyellow") %>%
+  kable_classic(html_font = "Cambria") %>%
+  column_spec(3, color = ifelse(as.numeric(con_result$estimate) < 0, "green", "red"))
+```
+
+-   Binary Outcome
+
+```{r}
+# Raw Feature Significance
+#fvc_bi = lapply(raw_features, function(x) #univariate_mix_logistic("fvc_50", x, mix_df)) %>% bind_rows() %>% arrange(p.value)
+mip_bi = lapply(wave_features, function(x) univariate_mix_logistic("mip_60", x, mix_df)) %>% bind_rows() %>% arrange(p.value)
+spo2_bi = lapply(wave_features, function(x) univariate_mix_logistic("spo2_88", x, mix_df)) %>% bind_rows() %>% arrange(p.value)
+bi_result = rbind(mip_bi, spo2_bi) %>% arrange(p.value) %>% filter(p.value <= 0.05) %>% mutate(conf.low = sprintf("%.3f", conf.low), estimate = sprintf("%.3f", estimate), conf.high = sprintf("%.3f", conf.high), p.value = sprintf("%.3f", p.value))
+kable(bi_result, align = "c") %>% kable_styling(bootstrap_options = "striped") %>% row_spec(which(as.numeric(bi_result$p.value) <= 0.05), bold = F, color = "black", background = "lightyellow") %>%
+  kable_classic(html_font = "Cambria") %>%
+  column_spec(3, color = ifelse(as.numeric(bi_result$estimate) < 0, "green", "red"))
+```
+:::
+
+## Hierarchical Clustering
+
+We found **MIP** levels significantly differ between the **visit-level** clusters and the **subject-level** clusters.
+
+::: panel-tabset
+### Night-level
+
+```{r}
+#| label: fig-charts4
+#| fig-cap: "MIP Distribution Between Clusters (Night-level)"
+
+
+k_means_df = subject_summary %>% left_join(features_df, by = c("subject", "day")) %>% na.omit()
+mat = as.matrix(k_means_df[wave_features]) 
+hclust.out = hclust(dist(mat))
+k_means_df$cluster = cutree(hclust.out, k = 4)
+k_means_df$cluster_night = sapply(k_means_df$cluster, function(x){case_when(x == 1 ~ 1, x == 2 ~ 1, x == 3 ~ 1, x == 4 ~ 0)}, USE.NAMES = FALSE)
+
+ggplot(k_means_df, aes(x = as.factor(cluster_night), y = mip, fill = as.factor(cluster_night))) +
+  geom_boxplot() +
+  geom_jitter() +
+  scale_x_discrete(labels = c("Normal", "Abnormal")) +
+  scale_fill_brewer(palette = "Set3") +
+  labs(x = "Cluster", y = "MIP", fill = "Cluster") +
+  theme(legend.position = "none")
+
+n_test = t.test(k_means_df$mip[which(k_means_df$cluster_night == 1)], k_means_df$mip[which(k_means_df$cluster_night == 0)], alternative = "two.sided")
+```
+
+-   The Welch Two Sample t-test resulted in a p-value of `r sprintf("%.2f", n_test$p.value)`, suggesting that there is no significant difference between the two groups.
+
+### Visit-level
+
+```{r}
+#| label: fig-charts5
+#| fig-cap: "MIP Distribution Between Clusters (Visit-level)"
+
+visit_cluster = k_means_df %>% dplyr::select(subject, year, visit, day, cluster_night) %>% group_by(subject, year, visit) %>% summarize(cluster_visit = mean(cluster_night)) %>% ungroup()
+visit_cluster$cluster_visit = sapply(visit_cluster$cluster_visit, function(x) case_when(x>=0.5~1,
+                      .default = 0), USE.NAMES = FALSE)
+visit_cluster = visit_cluster %>% left_join(k_means_df %>% dplyr::select(subject, year, visit, mip, fvc), by = c("subject", "year", "visit")) %>% distinct()
+
+ggplot(visit_cluster, aes(x = as.factor(cluster_visit), y = mip, fill = as.factor(cluster_visit))) +
+  geom_boxplot() +
+  geom_jitter() +
+  scale_x_discrete(labels = c("Normal", "Abnormal")) +
+  scale_fill_brewer(palette = "Set3") +
+  labs(x = "Cluster", y = "MIP", fill = "Cluster") +
+  theme(legend.position = "none")
+
+k_means_df  = k_means_df %>% left_join(visit_cluster %>% dplyr::select(subject, year, visit, cluster_visit), by = c("subject", "year", "visit"))
+
+v_test = t.test(visit_cluster$mip[which(visit_cluster$cluster_visit == 1)], visit_cluster$mip[which(visit_cluster$cluster_visit == 0)], alternative = "two.sided")
+```
+
+```{r}
+## mixed effect model for significance detection
+k_means_df = lapply(unique(k_means_df$subject), function(x){
+  sub_df = k_means_df %>% filter(subject == x) %>% arrange(day) 
+  sub_df = sub_df %>% mutate(visit_time = as.numeric(day - sub_df$day[1]), .after = visit)
+  return(sub_df)
+}) %>% bind_rows()
+k_means_df = k_means_df %>% mutate(sex = case_when(sex == "F" ~ 1, .default = 0))
+cluster_df = k_means_df %>% group_by(subject, year, visit) %>% summarise_if(is.numeric, mean, na.rm = TRUE) %>% ungroup()
+mm_visit = lmerTest::lmer(mip ~ cluster_visit + niv + niv*cluster_visit + sex + (1|subject), cluster_df)
+#mm_visit = lmerTest::lmer(mip ~ cluster_visit + (1|subject), cluster_df)
+mm_table = mm_visit %>% tidy(conf.int = TRUE) %>% filter(term %in%  c("cluster_visit", "sex", "niv", "cluster_visit:niv")) %>% dplyr::select(term, estimate, conf.low, conf.high, p.value)
+mm_table = mm_table %>% mutate(estimate = round(estimate, 2),
+                               conf.low = round(conf.low, 2),
+                               conf.high = round(conf.high, 2),
+                               p.value = round(p.value, 2)) %>% arrange(p.value)
+kable(mm_table, align = "c") %>% kable_styling(bootstrap_options = "striped") %>% row_spec(which(as.numeric(mm_table$p.value) <= 0.05), bold = F, color = "black", background = "lightyellow") %>%
+  kable_classic(html_font = "Cambria") %>%
+  column_spec(2, color = ifelse(as.numeric(mm_table$estimate) < 0, "green", "red"))
+```
+
+-   We used a linear mixed model (adjusting for both NIV and Sex) for statistical testing to account for repeated measurements.
+
+$$MIP \sim Cluster + NIV + NIV*Cluster + Sex + (1|Subject)$$
+
+-   The linear mixed model resulted in a p-value of [`r sprintf("%.2f", mm_table$p.value[1])`]{style="color:red;"}, suggesting a significant difference between the two groups. Sex is another covariate that has a significant effect on MIP.
+
+### Subject-level
+
+```{r}
+#| label: fig-charts6
+#| fig-cap: "MIP Distribution Between Clusters (Subject-level)"
+
+
+patient_cluster = k_means_df %>% dplyr::select(subject, visit, day, cluster_night) %>% group_by(subject) %>% summarize(cluster_patient = mean(cluster_night)) %>% ungroup()
+patient_cluster$cluster_patient = sapply(patient_cluster$cluster_patient, function(x) case_when(x>=0.5~1,
+                                                                                        .default = 0), USE.NAMES = FALSE)
+patient_cluster =patient_cluster %>% left_join(k_means_df %>% dplyr::select(subject, visit, mip, fvc) %>% group_by(subject) %>% summarize(mip = mean(mip), fvc = mean(fvc)), by = c("subject")) %>% distinct()
+
+ggplot(patient_cluster, aes(x = as.factor(cluster_patient), y = mip, fill = as.factor(cluster_patient))) +
+  geom_boxplot() +
+  geom_jitter() +
+  scale_x_discrete(labels = c("Normal", "Abnormal")) +
+  scale_fill_brewer(palette = "Set3") +
+  labs(x = "Cluster", y = "MIP", fill = "Cluster") +
+  theme(legend.position = "none")
+
+k_means_df  = k_means_df %>% left_join(patient_cluster %>% dplyr::select(subject, cluster_patient), by = c("subject"))
+
+s_test = t.test(patient_cluster$mip[which(patient_cluster$cluster_patient == 1)], patient_cluster$mip[which(patient_cluster$cluster_patient == 0)], alternative = "two.sided")
+```
+
+-   The Welch Two Sample t-test resulted in a p-value of [`r sprintf("%.2f", s_test$p.value)`]{style="color:red;"}, suggesting that there is a significant difference between the two groups.
+:::
+
+## Cox Regression Model
+
+No significant results found for our current sample size. We would suggest trying with a larger sample size.
+
+```{r}
+cox_result = cox_result %>% mutate(estimate = sprintf("%.3f", estimate),
+                                   p.value = sprintf("%.3f", p.value))
+colnames(cox_result) = c("variable", "HR", "CI", "p.value", "outcome")
+kable(cox_result, align = "c") %>% kable_styling(bootstrap_options = "striped") %>% row_spec(which(as.numeric(cox_result$p.value) <= 0.05), bold = F, color = "black", background = "lightyellow") %>%
+  kable_classic(html_font = "Cambria") 
+```

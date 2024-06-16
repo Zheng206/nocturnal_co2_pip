@@ -1,0 +1,26 @@
+{
+    "id": "1271388D",
+    "path": "~/Desktop/Nocturnal_CO2/code/co2_app/co2_function.R",
+    "project_path": "co2_function.R",
+    "type": "r_source",
+    "hash": "2774796176",
+    "contents": "",
+    "dirty": false,
+    "created": 1693238641211.0,
+    "source_on_save": false,
+    "relative_order": 4,
+    "properties": {
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "256,21",
+        "scrollLine": "0"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1702671173,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1702671173388,
+    "read_only": false,
+    "read_only_alternatives": []
+}

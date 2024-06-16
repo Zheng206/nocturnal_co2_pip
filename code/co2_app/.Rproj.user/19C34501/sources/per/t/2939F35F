@@ -1,0 +1,26 @@
+{
+    "id": "2939F35F",
+    "path": "~/Desktop/Nocturnal_CO2/code/R/overnight_co2_pip.R",
+    "project_path": null,
+    "type": "r_source",
+    "hash": "672609184",
+    "contents": "",
+    "dirty": false,
+    "created": 1702670465368.0,
+    "source_on_save": false,
+    "relative_order": 4,
+    "properties": {
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "37,0",
+        "scrollLine": "0"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1702676165,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1702676165383,
+    "read_only": false,
+    "read_only_alternatives": []
+}
