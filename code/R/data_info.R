@@ -3,9 +3,9 @@ library(tidyr)
 library(stringr)
 library(tidyverse)
 library(readxl)
-source("./code/R/pipeline/co2_function.R")
+source("./code/R/co2_function.R")
 
-path = list.files("./data/All subjects/20240311", recursive = TRUE, full.names = TRUE)
+path = list.files("./data/raw_data/raw_data_stream/20240311", recursive = TRUE, full.names = TRUE)
 
 # HYP
 hyp_path = path[which(grepl("HYP", path))]
@@ -48,14 +48,18 @@ N_visits = df %>% group_by(subject, year, visit) %>% summarize(count = n()) %>% 
 n_dc_4 = nrow(df %>% filter(DC == "DC", period == ">= 4 hours"))
 n_dc_4_visit = df %>% filter(DC == "DC", period == ">= 4 hours") %>% group_by(subject, year, visit) %>% summarize(count = n()) %>% ungroup() %>% nrow() 
 
-subject_summary = list.files("./data/data_management/summary_data", full.names = TRUE, recursive = TRUE) %>% read_csv()
+subject_summary = read_csv("./data/processed_data/subject_summary_20240311.csv")
 subject_summary$day = as.character(subject_summary$day)
 subject_summary$year = sapply(subject_summary$day, function(x) str_split(x, "-")[[1]][1], USE.NAMES = FALSE)
 df_info = df %>% dplyr::select(subject, year, visit, day, file, DC, period) %>% left_join(subject_summary, by = c("subject", "year", "visit", "day"))
-write_csv(df_info, "./data/data_management/data_info/info_0311.csv")
+write_csv(df_info, "./data/data_info/info_0311.csv")
 
 sample_size_summary = sample_info(df_info)
-write_csv(sample_size_summary, "./data/data_management/data_info/data_summary_20240311.csv")
+write_csv(sample_size_summary, "./data/data_info/data_summary_20240311.csv")
+
+
+
+
 
 
 # Prelim Data Table
